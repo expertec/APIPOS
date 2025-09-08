@@ -38,6 +38,43 @@ async function requireSuperadminOrKey(req, res, next) {
   }
 }
 
+// Ver proyecto (protegido por API KEY)
+router.get("/health-admin", async (req, res) => {
+  const key = req.headers["x-admin-key"];
+  if (!key || key !== process.env.ADMIN_API_KEY) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  const appOpts = admin.app().options || {};
+  res.json({
+    ok: true,
+    projectId: appOpts.projectId || null,
+    databaseURL: appOpts.databaseURL || null,
+  });
+});
+
+// Ver si un email existe en Auth y/o Firestore (protegido por API KEY)
+router.get("/debug-user", async (req, res) => {
+  const key = req.headers["x-admin-key"];
+  if (!key || key !== process.env.ADMIN_API_KEY) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  const email = String(req.query.email || "").trim().toLowerCase();
+  if (!email) return res.status(400).json({ error: "email requerido" });
+
+  try {
+    const user = await admin.auth().getUserByEmail(email);
+    const doc = await admin.firestore().collection("users").doc(user.uid).get();
+    return res.json({
+      ok: true,
+      authUser: { uid: user.uid, email: user.email, disabled: user.disabled, displayName: user.displayName },
+      userDoc: doc.exists ? { id: doc.id, ...doc.data() } : null,
+    });
+  } catch {
+    return res.json({ ok: true, authUser: null, userDoc: null, note: "No existe en Auth o Firestore" });
+  }
+});
+
+
 /**
  * Registro público (opcional):
  * - Crea usuario con rol "agent" por defecto.
