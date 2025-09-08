@@ -59,4 +59,40 @@ router.post("/register", async (req, res) => {
   }
 });
 
+// === PROMOTE USER TO ADMIN (PROD-ONLY, PROTECTED) ===
+router.post("/promote", async (req, res) => {
+  try {
+    const key = req.headers["x-admin-key"];
+    if (!key || key !== process.env.ADMIN_API_KEY) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const { email, role = "admin", orgId = "ORG_ABC", businessIds = [] } = req.body;
+    if (!email) return res.status(400).json({ error: "email requerido" });
+
+    const user = await admin.auth().getUserByEmail(email);
+    const uid = user.uid;
+
+    const claims = { role, orgId, businessIds, defaultBusinessId: businessIds[0] || null };
+    await admin.auth().setCustomUserClaims(uid, claims);
+
+    await admin.firestore().collection("users").doc(uid).set(
+      {
+        role,
+        orgId,
+        businessIds,
+        defaultBusinessId: businessIds[0] || null,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    res.json({ ok: true, uid, email, claims });
+  } catch (err) {
+    console.error("Promote error:", err);
+    res.status(500).json({ error: "No se pudo promover el usuario" });
+  }
+});
+
+
 module.exports = router;
