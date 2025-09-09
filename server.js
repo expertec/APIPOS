@@ -68,9 +68,9 @@ app.post("/api/wa/:orgId/:businessId/start", async (req, res) => {
   }
 });
 
-app.get("/api/wa/:orgId/:businessId/status", (req, res) => {
-  const { orgId, businessId } = req.params;
-  res.json(getStatus(orgId, businessId));
+app.get('/api/wa/:orgId/:businessId/status', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  return res.json(wa.getStatus(req.params.orgId, req.params.businessId));
 });
 
 app.post("/api/wa/:orgId/:businessId/send", async (req, res) => {
