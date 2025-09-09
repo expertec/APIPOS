@@ -1,102 +1,105 @@
 // server.js
+require("dotenv").config();
+
 const express = require("express");
 const cors = require("cors");
 const admin = require("firebase-admin");
-const path = require("path");
-const authRoutes = require("./routes/auth");
 
-const app = express();
+const authRoutes = require("./auth");           // tus rutas /api/register, /api/create-admin
+const wa = require("./waMulti");                // <-- IMPORTA las funciones de WhatsApp
 
-// --- CORS ---
-const allowedOrigins = [
-  "http://localhost:5173",
-  "http://localhost:3000",
-  "https://tu-frontend.web.app", // <-- cambia a tu dominio real
-  "https://tu-dominio.com"
-];
-
-app.use(
-  cors({
-    origin: (origin, cb) => {
-      if (!origin) return cb(null, true); // Postman/curl
-      if (allowedOrigins.includes(origin)) return cb(null, true);
-      return cb(new Error("Not allowed by CORS: " + origin), false);
-    },
-    credentials: true
-  })
-);
-
-app.use(express.json());
-
-// --- Firebase Admin ---
-// En Render, guarda tu JSON como secret file en /etc/secrets/serviceAccountKey.json
+// ========= Firebase Admin =========
 if (!admin.apps.length) {
-  try {
-    let serviceAccount;
-    if (process.env.RENDER) {
-      serviceAccount = require("/etc/secrets/serviceAccountKey.json");
-    } else {
-      serviceAccount = require(path.join(__dirname, "serviceAccountKey.json"));
-    }
-
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount),
-    });
-    console.log("Firebase Admin inicializado");
-  } catch (err) {
-    console.error("Error inicializando Firebase Admin:", err);
-    process.exit(1);
-  }
+  admin.initializeApp({
+    credential: admin.credential.applicationDefault(),
+  });
+  console.log("Firebase Admin inicializado");
 }
 
-// ⚠️ IMPORTANTE: requiere waMulti DESPUÉS de inicializar Admin
-const { startWhatsApp, getStatus, sendText, logout } = require("./waMulti");
+// ========= App =========
+const app = express();
+app.use(
+  cors({
+    origin: true,
+    credentials: true,
+  })
+);
+app.use(express.json());
 
-// --- Rutas básicas ---
-app.get("/api/health", (_, res) => res.json({ ok: true, msg: "API online 🚀" }));
+// ========= Rutas de Auth / Admin =========
 app.use("/api", authRoutes);
 
-// --- Endpoints WhatsApp multi-negocio ---
+// ========= WhatsApp (multi-negocio) =========
+//
+// IMPORTANTE: en Render usa una carpeta persistente. /data es persistente.
+// Puedes cambiar WA_BASE_DIR en variables de entorno si quieres otra ruta.
+const WA_BASE_DIR = process.env.WA_BASE_DIR || "/data/wa-sessions";
+
+// Inicializa el manejador WA
+wa.init({
+  baseDir: WA_BASE_DIR,
+  // puedes añadir más flags si los expusiste en waMulti.js
+});
+
+// Status de la sesión
+app.get("/api/wa/:orgId/:businessId/status", async (req, res) => {
+  try {
+    const { orgId, businessId } = req.params;
+    const data = await wa.status(orgId, businessId);
+    return res.json(data);
+  } catch (err) {
+    console.error("WA status error:", err);
+    return res.status(500).json({ error: "WA status error" });
+  }
+});
+
+// Iniciar / reiniciar (genera QR si no hay sesión)
 app.post("/api/wa/:orgId/:businessId/start", async (req, res) => {
   try {
     const { orgId, businessId } = req.params;
-    await startWhatsApp(orgId, businessId);
-    res.json({ ok: true });
-  } catch (e) {
-    console.error("wa start error", e);
-    res.status(500).json({ error: e.message });
+    const data = await wa.start(orgId, businessId);
+    return res.json(data);
+  } catch (err) {
+    console.error("WA start error:", err);
+    return res.status(500).json({ error: "WA start error" });
   }
 });
 
-app.get('/api/wa/:orgId/:businessId/status', (req, res) => {
-  res.set('Cache-Control', 'no-store');
-  return res.json(wa.getStatus(req.params.orgId, req.params.businessId));
-});
-
-app.post("/api/wa/:orgId/:businessId/send", async (req, res) => {
-  try {
-    const { orgId, businessId } = req.params;
-    const { to, text } = req.body;
-    if (!to || !text) return res.status(400).json({ error: "to y text son requeridos" });
-    const r = await sendText(orgId, businessId, to, text);
-    res.json(r);
-  } catch (e) {
-    console.error("wa send error", e);
-    res.status(500).json({ error: e.message });
-  }
-});
-
+// Logout (cierra sesión y borra carpeta de esa sesión)
 app.post("/api/wa/:orgId/:businessId/logout", async (req, res) => {
   try {
     const { orgId, businessId } = req.params;
-    const r = await logout(orgId, businessId);
-    res.json(r);
-  } catch (e) {
-    console.error("wa logout error", e);
-    res.status(500).json({ error: e.message });
+    const data = await wa.logout(orgId, businessId);
+    return res.json(data);
+  } catch (err) {
+    console.error("WA logout error:", err);
+    return res.status(500).json({ error: "WA logout error" });
   }
 });
 
-// --- Start ---
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`API escuchando en http://localhost:${PORT}`));
+// Enviar mensaje de prueba
+app.post("/api/wa/:orgId/:businessId/send-test", async (req, res) => {
+  try {
+    const { orgId, businessId } = req.params;
+    const { to, message } = req.body || {};
+    if (!to || !message) {
+      return res.status(400).json({ error: "to y message son requeridos" });
+    }
+    const data = await wa.sendTest(orgId, businessId, to, message);
+    return res.json(data);
+  } catch (err) {
+    console.error("WA send-test error:", err);
+    return res.status(500).json({ error: "WA send-test error" });
+  }
+});
+
+// ========= Health =========
+app.get("/", (_req, res) => {
+  res.send("OK");
+});
+
+// ========= Start =========
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => {
+  console.log(`API escuchando en http://localhost:${PORT}`);
+});
