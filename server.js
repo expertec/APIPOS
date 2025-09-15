@@ -5,8 +5,8 @@ const express = require("express");
 const cors = require("cors");
 const admin = require("firebase-admin");
 
-const authRoutes = require("./auth");           // tus rutas /api/register, /api/create-admin
-const wa = require("./waMulti");                // <-- IMPORTA las funciones de WhatsApp
+// Rutas de auth (tu archivo actual)
+const authRoutes = require("./auth");
 
 // ========= Firebase Admin =========
 if (!admin.apps.length) {
@@ -20,7 +20,7 @@ if (!admin.apps.length) {
 const app = express();
 app.use(
   cors({
-    origin: true,
+    origin: true, // en prod pon tu(s) dominio(s) aquí
     credentials: true,
   })
 );
@@ -30,22 +30,18 @@ app.use(express.json());
 app.use("/api", authRoutes);
 
 // ========= WhatsApp (multi-negocio) =========
-//
-// IMPORTANTE: en Render usa una carpeta persistente. /data es persistente.
-// Puedes cambiar WA_BASE_DIR en variables de entorno si quieres otra ruta.
-const WA_BASE_DIR = process.env.WA_BASE_DIR || "/data/wa-sessions";
+// Importa las funciones REALES de waMulti
+const { startWhatsApp, getStatus, sendText, logout } = require("./waMulti");
 
-// Inicializa el manejador WA
-wa.init({
-  baseDir: WA_BASE_DIR,
-  // puedes añadir más flags si los expusiste en waMulti.js
-});
+// Unifica la variable de entorno con la que usa waMulti.js
+// (waMulti lee WA_SESSION_ROOT internamente; aquí es opcional leerla, pero la dejamos por consistencia)
+process.env.WA_SESSION_ROOT = process.env.WA_SESSION_ROOT || "/var/data/wa-sessions";
 
 // Status de la sesión
 app.get("/api/wa/:orgId/:businessId/status", async (req, res) => {
   try {
     const { orgId, businessId } = req.params;
-    const data = await wa.status(orgId, businessId);
+    const data = await getStatus(orgId, businessId);
     return res.json(data);
   } catch (err) {
     console.error("WA status error:", err);
@@ -57,7 +53,9 @@ app.get("/api/wa/:orgId/:businessId/status", async (req, res) => {
 app.post("/api/wa/:orgId/:businessId/start", async (req, res) => {
   try {
     const { orgId, businessId } = req.params;
-    const data = await wa.start(orgId, businessId);
+    const runtime = await startWhatsApp(orgId, businessId);
+    // Devolvemos el estado actual (puede venir 'qr', 'connecting' o 'connected')
+    const data = await getStatus(orgId, businessId);
     return res.json(data);
   } catch (err) {
     console.error("WA start error:", err);
@@ -69,7 +67,7 @@ app.post("/api/wa/:orgId/:businessId/start", async (req, res) => {
 app.post("/api/wa/:orgId/:businessId/logout", async (req, res) => {
   try {
     const { orgId, businessId } = req.params;
-    const data = await wa.logout(orgId, businessId);
+    const data = await logout(orgId, businessId);
     return res.json(data);
   } catch (err) {
     console.error("WA logout error:", err);
@@ -85,7 +83,7 @@ app.post("/api/wa/:orgId/:businessId/send-test", async (req, res) => {
     if (!to || !message) {
       return res.status(400).json({ error: "to y message son requeridos" });
     }
-    const data = await wa.sendTest(orgId, businessId, to, message);
+    const data = await sendText(orgId, businessId, to, message);
     return res.json(data);
   } catch (err) {
     console.error("WA send-test error:", err);
