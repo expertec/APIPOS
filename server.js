@@ -6,7 +6,7 @@ const cors = require("cors");
 const admin = require("firebase-admin");
 
 // Rutas de auth (tu archivo actual)
-const authRoutes = require("./auth");
+// const authRoutes = require("./auth");
 
 // ========= Firebase Admin =========
 if (!admin.apps.length) {
