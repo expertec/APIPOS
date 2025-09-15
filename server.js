@@ -40,8 +40,12 @@ const { createBaileysManager } = require("./wa/manager"); // si usas wa/manager.
 // Si sigues usando waMulti.js tal como lo tenías, cambia la línea anterior por:
 // const { startWhatsApp, getStatus, sendText, logout } = require("./waMulti");
 
+// server.js
 const WA_SESSION_ROOT =
-  process.env.WA_SESSION_ROOT || path.join(__dirname, "data/wa");
+  process.env.WA_SESSION_ROOT || "/var/data/wa-sessions";
+
+console.log("[WA] WA_SESSION_ROOT =", WA_SESSION_ROOT);
+
 
 const wa = createBaileysManager({ basePath: WA_SESSION_ROOT });
 
