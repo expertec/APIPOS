@@ -6,6 +6,8 @@ const express = require("express");
 const cors = require("cors");
 const admin = require("firebase-admin");
 
+
+
 // ===== Firebase Admin =====
 if (!admin.apps.length) {
   // Usa credenciales de entorno (Render) o applicationDefault()
@@ -84,6 +86,17 @@ app.post("/api/wa/:tenant/prepare", (req, res) => {
     return res.json({ ok: true, dir });
   } catch (e) {
     return res.status(500).json({ error: "prepare-failed" });
+  }
+});
+
+// QR actual (si existe)
+app.get("/api/wa/:tenant/qr", async (req, res) => {
+  try {
+    const { tenant } = req.params;
+    const s = wa.ensure(tenant).getStatus();
+    return res.json({ qr: s.lastQr || null });
+  } catch (e) {
+    return res.status(500).json({ error: "qr-failed" });
   }
 });
 

@@ -1,32 +1,47 @@
+// wa/manager.js
 const path = require('node:path');
 const fs = require('node:fs');
 const makeWASocket = require('@whiskeysockets/baileys').default;
 const { useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 
+/**
+ * Manager multi-tenant de sesiones de Baileys.
+ * - Un cliente por tenantId.
+ * - Persistencia en disco usando useMultiFileAuthState(basePath/tenantId).
+ */
 function createBaileysManager({ basePath = './data/wa' } = {}) {
   fs.mkdirSync(basePath, { recursive: true });
+
+  /** @type {Map<string, ReturnType<typeof createClient>>} */
   const sessions = new Map(); // tenantId -> client
 
   function ensure(tenantId) {
-    if (!tenantId) tenantId = 'default';
-    if (!sessions.has(tenantId)) sessions.set(tenantId, createClient(tenantId));
-    return sessions.get(tenantId);
+    const id = tenantId || 'default';
+    if (!sessions.has(id)) sessions.set(id, createClient(id));
+    return sessions.get(id);
   }
 
   function createClient(tenantId) {
     let sock = null;
     let subscribers = [];
     let stopping = false;
-    let status = { tenantId, state: 'idle' }; // idle|connecting|connected|disconnected|error
+    let status = { tenantId, state: 'idle' }; // 'idle'|'connecting'|'connected'|'disconnected'|'error'
+    let lastQr = null; // último QR emitido por Baileys (string base64)
 
     const authDir = path.join(basePath, tenantId);
     fs.mkdirSync(authDir, { recursive: true });
 
-    const notify = (evt) => subscribers.forEach(fn => fn(evt));
-    const setStatus = (s) => { status.state = s; notify({ type: 'status', payload: s }); };
+    const notify = (evt) => { for (const fn of subscribers) fn(evt); };
+    const setStatus = (s) => {
+      status.state = s;
+      notify({ type: 'status', payload: s });
+    };
 
     async function start() {
-      if (sock) return;
+      // si venimos de un logout previo, permitir reconexiones normales
+      stopping = false;
+
+      if (sock) return; // ya iniciado
       setStatus('connecting');
 
       const { state, saveCreds } = await useMultiFileAuthState(authDir);
@@ -34,25 +49,37 @@ function createBaileysManager({ basePath = './data/wa' } = {}) {
         auth: state,
         printQRInTerminal: false,
         syncFullHistory: false,
-        browser: ['POS-SaaS','Chrome','1.0'],
+        browser: ['POS-SaaS', 'Chrome', '1.0'],
         msgRetryCounterCache: new Map(),
       });
 
       sock.ev.on('creds.update', saveCreds);
+
       sock.ev.on('connection.update', (u) => {
         const { connection, lastDisconnect, qr } = u;
-        if (qr) notify({ type: 'qr', payload: qr });
+
+        if (qr) {
+          // Guardamos y notificamos QR
+          lastQr = qr;
+          notify({ type: 'qr', payload: qr });
+        }
+
         if (connection === 'open') {
           setStatus('connected');
+          lastQr = null; // limpiamos QR al conectar
           notify({ type: 'connected', payload: { me: sock.user } });
         }
+
         if (connection === 'close') {
           const code = (lastDisconnect?.error?.output?.statusCode) || 0;
           sock = null;
+
           if (!stopping && code !== DisconnectReason.loggedOut) {
+            // caída accidental: marcamos y reintentamos
             setStatus('disconnected');
             setTimeout(start, 5000);
           } else {
+            // cierre esperado o loggedOut
             setStatus('disconnected');
           }
         }
@@ -69,11 +96,19 @@ function createBaileysManager({ basePath = './data/wa' } = {}) {
       stopping = true;
       try { await sock?.logout(); } catch {}
       sock = null;
+      lastQr = null;
       setStatus('disconnected');
     }
 
-    function subscribe(fn) { subscribers.push(fn); return () => { subscribers = subscribers.filter(s => s !== fn); }; }
-    function getStatus() { return status; }
+    function subscribe(fn) {
+      subscribers.push(fn);
+      return () => { subscribers = subscribers.filter((s) => s !== fn); };
+    }
+
+    function getStatus() {
+      // devolvemos estado + último QR disponible (si hay)
+      return { ...status, lastQr };
+    }
 
     return { start, logout, subscribe, getStatus };
   }
