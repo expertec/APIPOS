@@ -89,6 +89,21 @@ app.post("/api/wa/:tenant/prepare", (req, res) => {
   }
 });
 
+app.post("/api/wa/:tenant/send-text", async (req, res) => {
+  try {
+    const { tenant } = req.params;
+    const { to, text } = req.body || {};
+    if (!to || !text) return res.status(400).json({ error: "missing-to-or-text" });
+    const client = wa.ensure(tenant);
+    await client.start();
+    const result = await client.sendText(to, text);
+    res.json({ ok: true, result });
+  } catch (e) {
+    console.error("send-text failed", e);
+    res.status(500).json({ error: "send-text-failed" });
+  }
+});
+
 // QR actual (si existe)
 app.get("/api/wa/:tenant/qr", async (req, res) => {
   try {

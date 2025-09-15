@@ -26,7 +26,7 @@ function createBaileysManager({ basePath = './data/wa' } = {}) {
     let subscribers = [];
     let stopping = false;
     let status = { tenantId, state: 'idle' }; // 'idle'|'connecting'|'connected'|'disconnected'|'error'
-    let lastQr = null; // último QR emitido por Baileys (string base64)
+    let lastQr = null; // último QR emitido por Baileys (string)
 
     const authDir = path.join(basePath, tenantId);
     fs.mkdirSync(authDir, { recursive: true });
@@ -38,9 +38,7 @@ function createBaileysManager({ basePath = './data/wa' } = {}) {
     };
 
     async function start() {
-      // si venimos de un logout previo, permitir reconexiones normales
       stopping = false;
-
       if (sock) return; // ya iniciado
       setStatus('connecting');
 
@@ -59,14 +57,13 @@ function createBaileysManager({ basePath = './data/wa' } = {}) {
         const { connection, lastDisconnect, qr } = u;
 
         if (qr) {
-          // Guardamos y notificamos QR
           lastQr = qr;
           notify({ type: 'qr', payload: qr });
         }
 
         if (connection === 'open') {
           setStatus('connected');
-          lastQr = null; // limpiamos QR al conectar
+          lastQr = null;
           notify({ type: 'connected', payload: { me: sock.user } });
         }
 
@@ -75,11 +72,9 @@ function createBaileysManager({ basePath = './data/wa' } = {}) {
           sock = null;
 
           if (!stopping && code !== DisconnectReason.loggedOut) {
-            // caída accidental: marcamos y reintentamos
             setStatus('disconnected');
-            setTimeout(start, 5000);
+            setTimeout(start, 5000); // reintento
           } else {
-            // cierre esperado o loggedOut
             setStatus('disconnected');
           }
         }
@@ -100,17 +95,25 @@ function createBaileysManager({ basePath = './data/wa' } = {}) {
       setStatus('disconnected');
     }
 
+    // 🔹 NUEVO: envío de texto
+    async function sendText(to, text) {
+      if (!sock) throw new Error('not-started');
+      // normaliza: solo dígitos y agrega dominio si falta
+      const jid = to.includes('@') ? to : `${String(to).replace(/\D/g, '')}@s.whatsapp.net`;
+      return sock.sendMessage(jid, { text });
+    }
+
     function subscribe(fn) {
       subscribers.push(fn);
       return () => { subscribers = subscribers.filter((s) => s !== fn); };
     }
 
     function getStatus() {
-      // devolvemos estado + último QR disponible (si hay)
       return { ...status, lastQr };
     }
 
-    return { start, logout, subscribe, getStatus };
+    // 👉 agrega sendText en el return
+    return { start, logout, sendText, subscribe, getStatus };
   }
 
   return { ensure };
