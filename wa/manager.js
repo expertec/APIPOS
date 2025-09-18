@@ -29,6 +29,8 @@ function createBaileysManager({ basePath = './data/wa' } = {}) {
     let lastQr = null; // último QR emitido por Baileys (string)
 
     const authDir = path.join(basePath, tenantId);
+    console.log("[WA] createClient for tenant:", tenantId, "authDir:", authDir);
+
     fs.mkdirSync(authDir, { recursive: true });
 
     const notify = (evt) => { for (const fn of subscribers) fn(evt); };
@@ -109,8 +111,13 @@ function createBaileysManager({ basePath = './data/wa' } = {}) {
     }
 
     function getStatus() {
-      return { ...status, lastQr };
-    }
+  return {
+    ...status,
+    lastQr,
+    me: sock?.user || null,
+    authDir
+  };
+}
 
     // 👉 agrega sendText en el return
     return { start, logout, sendText, subscribe, getStatus };
