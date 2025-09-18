@@ -15,7 +15,12 @@ if (!admin.apps.length) {
     console.warn("Firebase Admin no inicializado:", e?.message || e);
   }
 }
+
 const db = admin.firestore?.();
+if (!db) {
+  console.error("[FATAL] Firestore Admin no disponible. Revisa credenciales/variables.");
+  // no salimos del proceso, pero cualquier ruta que toque `db` fallará.
+}
 
 // ===== App =====
 const app = express();
@@ -38,6 +43,7 @@ async function verifyFirebaseIdToken(req, res, next) {
 
 // ===== Helpers =====
 async function assertOwner(tenantId, uid) {
+  if (!db) throw Object.assign(new Error("DB not initialized"), { code: 500 });
   const ref = db.collection("companies").doc(tenantId);
   const snap = await ref.get();
   if (!snap.exists) {
@@ -76,6 +82,7 @@ app.get("/api/wa/:tenant/status", async (req, res) => {
     const { tenant } = req.params;
     return res.json(wa.ensure(tenant).getStatus());
   } catch (e) {
+    console.error("WA status error:", e);
     return res.status(500).json({ error: "status-failed" });
   }
 });
@@ -87,6 +94,7 @@ app.post("/api/wa/:tenant/start", async (req, res) => {
     await wa.ensure(tenant).start();
     return res.json(wa.ensure(tenant).getStatus());
   } catch (e) {
+    console.error("WA start error:", e);
     return res.status(500).json({ error: "start-failed" });
   }
 });
@@ -98,6 +106,7 @@ app.post("/api/wa/:tenant/logout", async (req, res) => {
     await wa.ensure(tenant).logout();
     return res.json({ ok: true });
   } catch (e) {
+    console.error("WA logout error:", e);
     return res.status(500).json({ error: "logout-failed" });
   }
 });
@@ -110,6 +119,7 @@ app.post("/api/wa/:tenant/prepare", (req, res) => {
     fs.mkdirSync(dir, { recursive: true });
     return res.json({ ok: true, dir });
   } catch (e) {
+    console.error("WA prepare error:", e);
     return res.status(500).json({ error: "prepare-failed" });
   }
 });
@@ -137,6 +147,7 @@ app.get("/api/wa/:tenant/qr", async (req, res) => {
     const s = wa.ensure(tenant).getStatus();
     return res.json({ qr: s.lastQr || null });
   } catch (e) {
+    console.error("WA qr error:", e);
     return res.status(500).json({ error: "qr-failed" });
   }
 });
@@ -157,14 +168,13 @@ app.post("/api/admin/invitations", verifyFirebaseIdToken, async (req, res) => {
       return res.status(400).json({ error: "tenantId & email required" });
     }
 
-    // Validar owner
     await assertOwner(tenantId, req.user.uid);
 
     const inviteId = crypto.randomUUID();
     const token = crypto.randomUUID();
     const now = admin.firestore.Timestamp.now();
     const expiresAt = admin.firestore.Timestamp.fromDate(
-      new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // 7 días
+      new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
     );
 
     await db.collection("companies").doc(tenantId)
@@ -180,8 +190,35 @@ app.post("/api/admin/invitations", verifyFirebaseIdToken, async (req, res) => {
       });
 
     const link = `${APP_BASE_URL}/accept-invite?tenant=${encodeURIComponent(tenantId)}&inviteId=${inviteId}&token=${token}`;
-    return res.json({ ok: true, inviteId, link });
+    return res.status(201).json({ ok: true, inviteId, link, role });
   } catch (e) {
+    console.error("create invitation failed:", e);
+    const code = e.code || 500;
+    return res.status(code).json({ error: e.message || "error" });
+  }
+});
+
+/**
+ * (Opcional) Lista invitaciones de un tenant (owner)
+ * GET /api/admin/invitations?tenantId=foo
+ */
+app.get("/api/admin/invitations", verifyFirebaseIdToken, async (req, res) => {
+  try {
+    const tenantId = req.query.tenantId;
+    if (!tenantId) return res.status(400).json({ error: "tenantId required" });
+
+    await assertOwner(tenantId, req.user.uid);
+
+    const qs = await db.collection("companies").doc(tenantId)
+      .collection("invitations")
+      .orderBy("createdAt", "desc")
+      .limit(50)
+      .get();
+
+    const items = qs.docs.map(d => ({ id: d.id, ...d.data() }));
+    return res.json({ ok: true, items });
+  } catch (e) {
+    console.error("list invitations failed:", e);
     const code = e.code || 500;
     return res.status(code).json({ error: e.message || "error" });
   }
@@ -191,7 +228,7 @@ app.post("/api/admin/invitations", verifyFirebaseIdToken, async (req, res) => {
  * Acepta una invitación
  * POST /api/admin/invitations/accept
  * body: { tenantId, inviteId, token }
- * header: Authorization: Bearer <idToken>  (del usuario que acepta)
+ * header: Authorization: Bearer <idToken>
  */
 app.post("/api/admin/invitations/accept", verifyFirebaseIdToken, async (req, res) => {
   try {
@@ -213,13 +250,11 @@ app.post("/api/admin/invitations/accept", verifyFirebaseIdToken, async (req, res
       return res.status(410).json({ error: "Invitation expired" });
     }
 
-    // Email del usuario autenticado debe coincidir
     const userEmail = (req.user.email || "").toLowerCase();
     if (!userEmail || userEmail !== String(inv.email).toLowerCase()) {
       return res.status(403).json({ error: "Email mismatch" });
     }
 
-    // Crear membresía
     await db.collection("companies").doc(tenantId)
       .collection("members").doc(req.user.uid)
       .set({
@@ -230,7 +265,6 @@ app.post("/api/admin/invitations/accept", verifyFirebaseIdToken, async (req, res
         joinedAt: admin.firestore.FieldValue.serverTimestamp(),
       }, { merge: true });
 
-    // Marcar invitación como aceptada
     await invRef.update({
       status: "accepted",
       acceptedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -238,13 +272,26 @@ app.post("/api/admin/invitations/accept", verifyFirebaseIdToken, async (req, res
 
     return res.json({ ok: true });
   } catch (e) {
+    console.error("accept invitation failed:", e);
     const code = e.code || 500;
     return res.status(code).json({ error: e.message || "error" });
   }
 });
 
 // ===== Health =====
-app.get("/", (_req, res) => res.send("OK"));
+app.get("/", (_req, res) => res.json({ ok: true }));
+
+// ===== 404 JSON siempre =====
+app.use((req, res) => {
+  res.status(404).json({ error: "not_found", path: req.originalUrl });
+});
+
+// ===== Error handler JSON siempre =====
+app.use((err, req, res, _next) => {
+  console.error("UNCAUGHT ERROR:", err);
+  const status = err.status || err.code || 500;
+  res.status(status).json({ error: err.message || "internal_error" });
+});
 
 // ===== Listen =====
 const PORT = process.env.PORT || 10000;
