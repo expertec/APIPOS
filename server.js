@@ -6,6 +6,7 @@ const crypto = require("node:crypto");
 const express = require("express");
 const cors = require("cors");
 const admin = require("firebase-admin");
+const companies = require("./routes/companies");
 
 // ===== Firebase Admin =====
 if (!admin.apps.length) {
@@ -26,6 +27,7 @@ if (!db) {
 const app = express();
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
+app.use("/api/admin/companies", companies);
 
 // ===== Middleware: verifica ID Token de Firebase =====
 async function verifyFirebaseIdToken(req, res, next) {
