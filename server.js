@@ -44,7 +44,7 @@ const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || "")
   .map(s => s.trim())
   .filter(Boolean);
 if (ALLOWED_ORIGINS.length === 0) {
-  ALLOWED_ORIGINS.push("http://localhost:5173", "http://localhost:5174");
+  ALLOWED_ORIGINS.push("http://localhost:5173", "http://localhost:5174", "http://localhost:5175");
 }
 app.use(cors({ origin: ALLOWED_ORIGINS, credentials: false }));
 
