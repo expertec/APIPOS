@@ -4,18 +4,34 @@ const admin = require("firebase-admin");
 const { verifyFirebaseIdToken } = require("../middleware/auth");
 
 const router = express.Router();
+
+// protege todas las rutas de este router
 router.use(verifyFirebaseIdToken);
 
-router.get("/", async (_req, res) => {
+// GET /api/admin/plans
+router.get("/", async (req, res) => {
   try {
-    const snap = await admin.firestore().collection("plans").orderBy("sort", "asc").get().catch(async () => {
-      // si no hay 'sort', devuélvelos como estén
-      return await admin.firestore().collection("plans").get();
+    // Log útil para ver si el token llegó bien
+    console.log("[plans] requester:", req.user?.uid, req.user?.email);
+
+    const col = admin.firestore().collection("plans");
+
+    // Evitamos posibles rarezas con orderBy si algún doc no tiene 'sort'
+    const snap = await col.get();
+    const items = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+    // Ordenamos en memoria si hay 'sort'; si no, dejamos como viene
+    items.sort((a, b) => {
+      const sa = typeof a.sort === "number" ? a.sort : Number.MAX_SAFE_INTEGER;
+      const sb = typeof b.sort === "number" ? b.sort : Number.MAX_SAFE_INTEGER;
+      return sa - sb;
     });
-    const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    res.json({ ok: true, items });
+
+    console.log("[plans] count:", items.length);
+    return res.json({ ok: true, items });
   } catch (e) {
-    res.status(500).json({ error: e.message || "Error leyendo planes" });
+    console.error("GET /api/admin/plans error:", e);
+    return res.status(500).json({ error: e?.message || "Error leyendo planes" });
   }
 });
 
