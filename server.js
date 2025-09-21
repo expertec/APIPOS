@@ -6,14 +6,12 @@ const fs = require("node:fs");
 const express = require("express");
 const cors = require("cors");
 const admin = require("firebase-admin");
-const productsRouter = require("./routes/products");
 
-// ---- Firebase Admin init (service account > applicationDefault > ENV) ----
+// ---- Firebase Admin init (service account > ENV > applicationDefault) ----
 if (!admin.apps.length) {
   try {
     const saPath = path.resolve(__dirname, "serviceAccountKey.json");
     if (fs.existsSync(saPath)) {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
       const serviceAccount = require(saPath);
       admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
       console.log("[Admin] Inicializado con serviceAccountKey.json");
@@ -35,6 +33,14 @@ if (!admin.apps.length) {
   }
 }
 
+// ✅ aplica en todos los casos
+try {
+  const firestore = admin.firestore();
+  firestore.settings({ ignoreUndefinedProperties: true });
+} catch (e) {
+  console.warn("No se pudo aplicar ignoreUndefinedProperties:", e?.message || e);
+}
+
 const db = admin.firestore?.();
 if (!db) {
   console.error("[FATAL] Firestore Admin no disponible. Revisa credenciales/variables.");
@@ -43,7 +49,7 @@ if (!db) {
 // ---- Express app ----
 const app = express();
 
-// CORS: ajusta tus orígenes
+// CORS
 const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || "")
   .split(",")
   .map(s => s.trim())
@@ -59,10 +65,7 @@ const plansRouter = require("./routes/plans");
 const kpisRouter = require("./routes/kpis");
 const companiesRouter = require("./routes/companies");
 const invitationsRouter = require("./routes/invitations");
-
-// (Opcional) proteger con tu middleware de auth si aplica:
-// const { verifyFirebaseIdToken } = require("./middleware/auth");
-// app.use("/api/kpis", verifyFirebaseIdToken);
+const productsRouter = require("./routes/products"); // ⬅️ movido aquí
 
 app.use("/api/admin/companies", companiesRouter);
 app.use("/api/admin/invitations", invitationsRouter);
@@ -70,17 +73,10 @@ app.use("/api/admin/plans", plansRouter);
 app.use("/api/kpis", kpisRouter);
 app.use("/api/admin/products", productsRouter);
 
-// ---- Opcional: rutas de auth si las tienes ----
+// ---- Opcional: rutas de auth ----
 let authRoutes;
-try {
-  authRoutes = require("./auth");
-} catch (_) {
-  try {
-    authRoutes = require("./routes/auth");
-  } catch (e) {
-    console.warn("No se encontró auth.js ni routes/auth.js; /api auth no se montará.");
-  }
-}
+try { authRoutes = require("./auth"); }
+catch (_) { try { authRoutes = require("./routes/auth"); } catch { console.warn("Sin rutas /api auth"); } }
 if (authRoutes) app.use("/api", authRoutes);
 
 // ---- WhatsApp multi-tenant (Baileys) ----
@@ -90,41 +86,23 @@ console.log("[WA] WA_SESSION_ROOT =", WA_SESSION_ROOT);
 const wa = createBaileysManager({ basePath: WA_SESSION_ROOT });
 
 app.get("/api/wa/:tenant/status", (req, res) => {
-  try {
-    const { tenant } = req.params;
-    return res.json(wa.ensure(tenant).getStatus());
-  } catch (e) {
-    console.error("WA status error:", e);
-    return res.status(500).json({ error: "status-failed" });
-  }
+  try { return res.json(wa.ensure(req.params.tenant).getStatus()); }
+  catch (e) { console.error("WA status error:", e); return res.status(500).json({ error: "status-failed" }); }
 });
 
 app.post("/api/wa/:tenant/start", async (req, res) => {
-  try {
-    const { tenant } = req.params;
-    await wa.ensure(tenant).start();
-    return res.json(wa.ensure(tenant).getStatus());
-  } catch (e) {
-    console.error("WA start error:", e);
-    return res.status(500).json({ error: "start-failed" });
-  }
+  try { await wa.ensure(req.params.tenant).start(); return res.json(wa.ensure(req.params.tenant).getStatus()); }
+  catch (e) { console.error("WA start error:", e); return res.status(500).json({ error: "start-failed" }); }
 });
 
 app.post("/api/wa/:tenant/logout", async (req, res) => {
-  try {
-    const { tenant } = req.params;
-    await wa.ensure(tenant).logout();
-    return res.json({ ok: true });
-  } catch (e) {
-    console.error("WA logout error:", e);
-    return res.status(500).json({ error: "logout-failed" });
-  }
+  try { await wa.ensure(req.params.tenant).logout(); return res.json({ ok: true }); }
+  catch (e) { console.error("WA logout error:", e); return res.status(500).json({ error: "logout-failed" }); }
 });
 
 app.post("/api/wa/:tenant/prepare", (req, res) => {
   try {
-    const { tenant } = req.params;
-    const dir = path.join(WA_SESSION_ROOT, tenant);
+    const dir = path.join(WA_SESSION_ROOT, req.params.tenant);
     fs.mkdirSync(dir, { recursive: true });
     return res.json({ ok: true, dir });
   } catch (e) {
@@ -135,10 +113,9 @@ app.post("/api/wa/:tenant/prepare", (req, res) => {
 
 app.post("/api/wa/:tenant/send-text", async (req, res) => {
   try {
-    const { tenant } = req.params;
     const { to, text } = req.body || {};
     if (!to || !text) return res.status(400).json({ error: "missing-to-or-text" });
-    const client = wa.ensure(tenant);
+    const client = wa.ensure(req.params.tenant);
     await client.start();
     const result = await client.sendText(to, text);
     res.json({ ok: true, result });
@@ -149,23 +126,15 @@ app.post("/api/wa/:tenant/send-text", async (req, res) => {
 });
 
 app.get("/api/wa/:tenant/qr", (req, res) => {
-  try {
-    const { tenant } = req.params;
-    const s = wa.ensure(tenant).getStatus();
-    return res.json({ qr: s.lastQr || null });
-  } catch (e) {
-    console.error("WA qr error:", e);
-    return res.status(500).json({ error: "qr-failed" });
-  }
+  try { return res.json({ qr: wa.ensure(req.params.tenant).getStatus().lastQr || null }); }
+  catch (e) { console.error("WA qr error:", e); return res.status(500).json({ error: "qr-failed" }); }
 });
 
 // ---- Health ----
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
 // ---- 404 JSON ----
-app.use((req, res) => {
-  res.status(404).json({ error: "not_found", path: req.originalUrl });
-});
+app.use((req, res) => res.status(404).json({ error: "not_found", path: req.originalUrl }));
 
 // ---- Error handler JSON ----
 app.use((err, _req, res, _next) => {
