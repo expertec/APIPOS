@@ -6,25 +6,27 @@ const fs = require("node:fs");
 const express = require("express");
 const cors = require("cors");
 const admin = require("firebase-admin");
-const plansRouter = require("./routes/plans");
-const kpisRouter = require("./routes/kpis");
 
-// ---- Firebase Admin init (service account > applicationDefault) ----
+// ---- Firebase Admin init (service account > applicationDefault > ENV) ----
 if (!admin.apps.length) {
   try {
-    // Preferir serviceAccountKey.json si existe
     const saPath = path.resolve(__dirname, "serviceAccountKey.json");
     if (fs.existsSync(saPath)) {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const serviceAccount = require(saPath);
-      admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount),
-      });
+      admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
       console.log("[Admin] Inicializado con serviceAccountKey.json");
-    } else {
+    } else if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY) {
       admin.initializeApp({
-        credential: admin.credential.applicationDefault(),
+        credential: admin.credential.cert({
+          projectId: process.env.FIREBASE_PROJECT_ID,
+          clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+          privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n"),
+        }),
       });
+      console.log("[Admin] Inicializado con credenciales por ENV");
+    } else {
+      admin.initializeApp({ credential: admin.credential.applicationDefault() });
       console.log("[Admin] Inicializado con applicationDefault()");
     }
   } catch (e) {
@@ -49,19 +51,22 @@ if (ALLOWED_ORIGINS.length === 0) {
   ALLOWED_ORIGINS.push("http://localhost:5173", "http://localhost:5174", "http://localhost:5175");
 }
 app.use(cors({ origin: ALLOWED_ORIGINS, credentials: false }));
-
 app.use(express.json());
 
-// ---- Routers (todas las rutas autenticadas están dentro de /routes/*.js) ----
+// ---- Routers (importar DESPUÉS del init de Admin) ----
+const plansRouter = require("./routes/plans");
+const kpisRouter = require("./routes/kpis");
 const companiesRouter = require("./routes/companies");
 const invitationsRouter = require("./routes/invitations");
 
-// Monta routers bajo /api/admin/*
+// (Opcional) proteger con tu middleware de auth si aplica:
+// const { verifyFirebaseIdToken } = require("./middleware/auth");
+// app.use("/api/kpis", verifyFirebaseIdToken);
+
 app.use("/api/admin/companies", companiesRouter);
 app.use("/api/admin/invitations", invitationsRouter);
 app.use("/api/admin/plans", plansRouter);
 app.use("/api/kpis", kpisRouter);
-
 
 // ---- Opcional: rutas de auth si las tienes ----
 let authRoutes;
@@ -76,13 +81,12 @@ try {
 }
 if (authRoutes) app.use("/api", authRoutes);
 
-// ---- WhatsApp multi-tenant (lo de Baileys como ya lo tenías) ----
+// ---- WhatsApp multi-tenant (Baileys) ----
 const { createBaileysManager } = require("./wa/manager");
 const WA_SESSION_ROOT = process.env.WA_SESSION_ROOT || "/var/data/wa-sessions";
 console.log("[WA] WA_SESSION_ROOT =", WA_SESSION_ROOT);
 const wa = createBaileysManager({ basePath: WA_SESSION_ROOT });
 
-// Status
 app.get("/api/wa/:tenant/status", (req, res) => {
   try {
     const { tenant } = req.params;
@@ -93,7 +97,6 @@ app.get("/api/wa/:tenant/status", (req, res) => {
   }
 });
 
-// Start
 app.post("/api/wa/:tenant/start", async (req, res) => {
   try {
     const { tenant } = req.params;
@@ -105,7 +108,6 @@ app.post("/api/wa/:tenant/start", async (req, res) => {
   }
 });
 
-// Logout
 app.post("/api/wa/:tenant/logout", async (req, res) => {
   try {
     const { tenant } = req.params;
@@ -117,7 +119,6 @@ app.post("/api/wa/:tenant/logout", async (req, res) => {
   }
 });
 
-// Prepare
 app.post("/api/wa/:tenant/prepare", (req, res) => {
   try {
     const { tenant } = req.params;
@@ -130,7 +131,6 @@ app.post("/api/wa/:tenant/prepare", (req, res) => {
   }
 });
 
-// Send text
 app.post("/api/wa/:tenant/send-text", async (req, res) => {
   try {
     const { tenant } = req.params;
@@ -146,7 +146,6 @@ app.post("/api/wa/:tenant/send-text", async (req, res) => {
   }
 });
 
-// QR
 app.get("/api/wa/:tenant/qr", (req, res) => {
   try {
     const { tenant } = req.params;
@@ -175,4 +174,6 @@ app.use((err, _req, res, _next) => {
 
 // ---- Listen ----
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`API escuchando en :${PORT} - ORIGINS: ${ALLOWED_ORIGINS.join(", ")}`));
+app.listen(PORT, () =>
+  console.log(`API escuchando en :${PORT} - ORIGINS: ${ALLOWED_ORIGINS.join(", ")}`)
+);
