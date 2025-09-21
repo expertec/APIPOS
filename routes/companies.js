@@ -2,6 +2,7 @@
 const express = require("express");
 const admin = require("firebase-admin");
 const { verifyFirebaseIdToken } = require("../middleware/auth");
+const { seedKpisForTenant } = require("../lib/kpisSeed");
 const router = express.Router();
 router.use(verifyFirebaseIdToken);
 
@@ -62,7 +63,7 @@ router.post("/", async (req, res) => {
       automation: true,
       settings: true,
     };
-
+await seedKpisForTenant(slugId);
     // 4) Crea compañía
     await companyRef.set({
       name,
