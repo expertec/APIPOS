@@ -241,7 +241,7 @@ router.get("/", async (req, res) => {
 
     ref = ref.limit(Number(limit));
 
-    // ----- intento normal -----
+       // ----- intento normal -----
     try {
       const snap = await ref.get();
       const items = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
@@ -249,8 +249,13 @@ router.get("/", async (req, res) => {
       return res.json({ items, nextCursor });
     } catch (e) {
       const msg = String(e?.message || "");
-      // 9 = FAILED_PRECONDITION => falta índice compuesto
-      if ((e.code === 9 || e.code === "failed-precondition") && msg.includes("create an index")) {
+      const isIndexError =
+        e?.code === 9 ||                     // gRPC FAILED_PRECONDITION
+        /requires an index/i.test(msg) ||
+        /create.*index/i.test(msg) ||
+        /indexes\?create_composite/i.test(msg);
+
+      if (isIndexError) {
         console.warn("products:list fallback sin orderBy por índice faltante");
 
         // reconstruimos consulta SIN orderBy ni cursor (para no requerir índice)
@@ -259,18 +264,16 @@ router.get("/", async (req, res) => {
         if (categoryId) ref2 = ref2.where("categoryIds", "array-contains", String(categoryId));
         if (onSale === "true") ref2 = ref2.where("price.onSale", "==", true);
         if (onSale === "false") ref2 = ref2.where("price.onSale", "==", false);
-        if (q) {
-          ref2 = ref2.where("nameKeywords", "array-contains", String(q).toLowerCase());
-        }
+        if (q) ref2 = ref2.where("nameKeywords", "array-contains", String(q).toLowerCase());
         ref2 = ref2.limit(Number(limit));
 
         const snap2 = await ref2.get();
         const items = snap2.docs.map((d) => ({ id: d.id, ...d.data() }));
         return res.json({ items, nextCursor: null, fallbackNoIndex: true });
       }
-      // cualquier otro error
-      throw e;
+      throw e; // otro error: propágalo al catch externo
     }
+
   } catch (e) {
     console.error("products:list", e);
     res.status(500).json({ error: "internal_error" });
