@@ -156,7 +156,7 @@ function normalizeProductInput(input = {}) {
     sku: input.sku || null,
     status: input.status || "draft",          // draft | active | archived
     visibility: input.visibility || "catalog",// catalog | hidden
-    type,                                     
+    type,
 
     price,
     shortDescription,
@@ -226,8 +226,7 @@ router.get("/", async (req, res) => {
     // Búsqueda simple por keywords
     if (q) {
       ref = ref.where("nameKeywords", "array-contains", String(q).toLowerCase());
-      // notemos que con where(...) + array-contains no haremos paginación por cursor
-      // (nextCursor vendrá null en búsquedas)
+      // con q no usamos orderBy/cursor
     } else {
       // Orden configurable cuando NO hay q
       const validSort = sort === "updatedAt" ? "updatedAt" : "name";
@@ -242,11 +241,36 @@ router.get("/", async (req, res) => {
 
     ref = ref.limit(Number(limit));
 
-    const snap = await ref.get();
-    const items = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    const nextCursor = !q && snap.docs.length ? snap.docs[snap.docs.length - 1].id : null;
+    // ----- intento normal -----
+    try {
+      const snap = await ref.get();
+      const items = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      const nextCursor = !q && snap.docs.length ? snap.docs[snap.docs.length - 1].id : null;
+      return res.json({ items, nextCursor });
+    } catch (e) {
+      const msg = String(e?.message || "");
+      // 9 = FAILED_PRECONDITION => falta índice compuesto
+      if ((e.code === 9 || e.code === "failed-precondition") && msg.includes("create an index")) {
+        console.warn("products:list fallback sin orderBy por índice faltante");
 
-    res.json({ items, nextCursor });
+        // reconstruimos consulta SIN orderBy ni cursor (para no requerir índice)
+        let ref2 = col;
+        if (type) ref2 = ref2.where("type", "==", String(type));
+        if (categoryId) ref2 = ref2.where("categoryIds", "array-contains", String(categoryId));
+        if (onSale === "true") ref2 = ref2.where("price.onSale", "==", true);
+        if (onSale === "false") ref2 = ref2.where("price.onSale", "==", false);
+        if (q) {
+          ref2 = ref2.where("nameKeywords", "array-contains", String(q).toLowerCase());
+        }
+        ref2 = ref2.limit(Number(limit));
+
+        const snap2 = await ref2.get();
+        const items = snap2.docs.map((d) => ({ id: d.id, ...d.data() }));
+        return res.json({ items, nextCursor: null, fallbackNoIndex: true });
+      }
+      // cualquier otro error
+      throw e;
+    }
   } catch (e) {
     console.error("products:list", e);
     res.status(500).json({ error: "internal_error" });
