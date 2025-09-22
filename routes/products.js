@@ -199,28 +199,41 @@ async function bumpCategoryCounts(tenant, oldIds = [], newIds = []) {
 }
 
 /* -------------------- LIST -------------------- */
-// GET /api/admin/products?tenant=...&q=...&categoryId=...&type=...&limit=...
+// GET /api/admin/products?tenant=...&q=...&categoryId=...&type=...&onSale=true&limit=...&sort=updatedAt|name&dir=asc|desc&cursor=...
 router.get("/", async (req, res) => {
   try {
-    const { tenant, q = "", limit = 20, cursor, categoryId, type } = req.query;
+    const {
+      tenant,
+      q = "",
+      limit = 20,
+      cursor,
+      categoryId,
+      type,
+      onSale,           // "true" | "false" | undefined
+      sort = "name",    // "name" | "updatedAt"
+      dir = "asc",      // "asc" | "desc"
+    } = req.query;
     if (!tenant) return res.status(400).json({ error: "Missing tenant" });
 
     const col = db().collection("companies").doc(tenant).collection("products");
-
     let ref = col;
 
-    if (type) {
-      ref = ref.where("type", "==", String(type));
-    }
-    if (categoryId) {
-      ref = ref.where("categoryIds", "array-contains", String(categoryId));
-    }
+    if (type) ref = ref.where("type", "==", String(type));
+    if (categoryId) ref = ref.where("categoryIds", "array-contains", String(categoryId));
+    if (onSale === "true") ref = ref.where("price.onSale", "==", true);
+    if (onSale === "false") ref = ref.where("price.onSale", "==", false);
 
+    // Búsqueda simple por keywords
     if (q) {
-      // búsqueda simple por keywords
       ref = ref.where("nameKeywords", "array-contains", String(q).toLowerCase());
+      // notemos que con where(...) + array-contains no haremos paginación por cursor
+      // (nextCursor vendrá null en búsquedas)
     } else {
-      ref = ref.orderBy("name");
+      // Orden configurable cuando NO hay q
+      const validSort = sort === "updatedAt" ? "updatedAt" : "name";
+      const validDir = dir === "desc" ? "desc" : "asc";
+      ref = ref.orderBy(validSort, validDir);
+
       if (cursor) {
         const cur = await col.doc(String(cursor)).get();
         if (cur.exists) ref = ref.startAfter(cur);
