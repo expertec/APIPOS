@@ -9,6 +9,7 @@ router.use(verifyFirebaseIdToken);
 const db = () => admin.firestore();
 const now = () => admin.firestore.FieldValue.serverTimestamp();
 
+/* -------------------- utils -------------------- */
 function slugify(s) {
   return String(s || "")
     .toLowerCase()
@@ -17,7 +18,21 @@ function slugify(s) {
     .replace(/(^-|-$)/g, "");
 }
 
-/* -------------------- LIST -------------------- */
+/** Convierte undefined->null y limpia recursivamente (Firestore no acepta undefined) */
+function stripUndefinedDeep(o) {
+  if (Array.isArray(o)) return o.map(stripUndefinedDeep);
+  if (o && typeof o === "object") {
+    const out = {};
+    for (const k of Object.keys(o)) {
+      const v = stripUndefinedDeep(o[k]);
+      if (v !== undefined) out[k] = v;
+    }
+    return out;
+  }
+  return o === undefined ? null : o;
+}
+
+/* -------------------- GET /api/admin/categories?tenant=... -------------------- */
 router.get("/", async (req, res) => {
   try {
     const { tenant } = req.query;
@@ -25,117 +40,133 @@ router.get("/", async (req, res) => {
 
     const col = db().collection("companies").doc(tenant).collection("categories");
 
-    // fallback orden por nombre para que siempre funcione
-    let ref = col.orderBy("sort").orderBy("name");
-    const snap = await ref.get();
-    const items = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    let snap;
+    try {
+      // preferimos ordenar por sort (position). Si falla (p.ej. índice raro), caemos a sin orden.
+      snap = await col.orderBy("sort").get();
+    } catch (e) {
+      console.warn("[categories:list] orderBy(sort) falló, usando sin orden:", e?.message || e);
+      snap = await col.get();
+    }
 
-    res.json({ items }); // ✅ el front espera { items: [...] }
+    const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    return res.json({ items });
   } catch (e) {
     console.error("categories:list", e);
-    res.status(500).json({ error: "internal_error" });
+    return res.status(500).json({ error: "internal_error" });
   }
 });
 
-/* -------------------- CREATE -------------------- */
+/* -------------------- POST /api/admin/categories -------------------- */
+/* Body esperado: { tenant, category: { name, parentId?, color?, position? } } */
 router.post("/", async (req, res) => {
   try {
-    const { tenant, name, parentId = null, sort = 0 } = req.body || {};
-    if (!tenant || !name)
-      return res.status(400).json({ error: "Missing tenant/name" });
-
-    const slug = slugify(name);
-
-    // path
-    let path = [slug];
-    if (parentId) {
-      const p = await db()
-        .collection("companies")
-        .doc(tenant)
-        .collection("categories")
-        .doc(parentId)
-        .get();
-      if (!p.exists) return res.status(400).json({ error: "parent_not_found" });
-      path = [...(p.data().path || []), slug];
+    const { tenant, category } = req.body || {};
+    if (!tenant || !category || !category.name) {
+      return res.status(400).json({ error: "Missing tenant/category.name" });
     }
 
-    const ref = db().collection("companies").doc(tenant).collection("categories").doc();
-    await ref.set({
+    const name = String(category.name).trim();
+    const slug = slugify(name);
+    const parentId = category.parentId ?? null;
+    const sort = category.position != null ? Number(category.position) : Number(category.sort ?? 0);
+    const color = category.color ?? null;
+
+    // path jerárquico
+    let pathArr = [slug];
+    if (parentId) {
+      const p = await db().collection("companies").doc(tenant).collection("categories").doc(parentId).get();
+      if (!p.exists) return res.status(400).json({ error: "parent_not_found" });
+      pathArr = [ ...(p.data().path || []), slug ];
+    }
+
+    const data = stripUndefinedDeep({
       name,
       slug,
       parentId,
-      path,
+      color,
       sort,
+      position: sort,              // alias por compat
+      path: pathArr,
       productCount: 0,
       createdAt: now(),
       updatedAt: now(),
     });
 
+    const ref = db().collection("companies").doc(tenant).collection("categories").doc();
+    await ref.set(data);
+
     const fresh = await ref.get();
-    res.json({ id: ref.id, ...fresh.data() });
+    return res.json({ id: ref.id, ...fresh.data() });
   } catch (e) {
     console.error("categories:create", e);
-    res.status(500).json({ error: e.message || "internal_error" });
+    return res.status(500).json({ error: e.message || "internal_error" });
   }
 });
 
-/* -------------------- UPDATE -------------------- */
+/* -------------------- PUT /api/admin/categories/:id -------------------- */
+/* Body esperado: { tenant, updates: { name?, parentId?, color?, position?/sort? } } */
 router.put("/:id", async (req, res) => {
   try {
-    const { tenant, name, parentId, sort } = req.body || {};
+    const { tenant, updates } = req.body || {};
     const { id } = req.params;
-    if (!tenant || !id)
-      return res.status(400).json({ error: "Missing tenant/id" });
+    if (!tenant || !id) return res.status(400).json({ error: "Missing tenant/id" });
 
     const toSet = { updatedAt: now() };
-    if (name != null) {
-      toSet.name = String(name);
-      toSet.slug = slugify(name);
-    }
-    if (parentId !== undefined) toSet.parentId = parentId || null;
-    if (sort != null) toSet.sort = Number(sort);
 
-    // recomputar path si cambió name o parentId
-    if (toSet.name != null || parentId !== undefined) {
-      let path = [slugify(toSet.name || name)];
-      if (parentId) {
-        const p = await db()
-          .collection("companies")
-          .doc(tenant)
-          .collection("categories")
-          .doc(parentId)
-          .get();
-        if (!p.exists) return res.status(400).json({ error: "parent_not_found" });
-        path = [...(p.data().path || []), path[0]];
+    if (updates) {
+      if (updates.name != null) {
+        toSet.name = String(updates.name).trim();
+        toSet.slug = slugify(toSet.name);
       }
-      toSet.path = path;
+      if (updates.parentId !== undefined) {
+        toSet.parentId = updates.parentId || null;
+      }
+      if (updates.color !== undefined) toSet.color = updates.color ?? null;
+
+      // position/sort alias
+      if (updates.position != null) toSet.sort = Number(updates.position);
+      if (updates.sort != null) toSet.sort = Number(updates.sort);
+
+      // recomputar path si cambió el nombre o el parentId
+      if (toSet.name != null || updates.parentId !== undefined) {
+        const ownSlug = slugify(toSet.name ?? updates.name ?? "");
+        let pathArr = [ownSlug];
+
+        const parentId = updates.parentId !== undefined ? updates.parentId : undefined;
+        if (parentId) {
+          const p = await db().collection("companies").doc(tenant).collection("categories").doc(parentId).get();
+          if (!p.exists) return res.status(400).json({ error: "parent_not_found" });
+          pathArr = [ ...(p.data().path || []), ownSlug ];
+        }
+        toSet.path = pathArr;
+      }
     }
 
     const ref = db().collection("companies").doc(tenant).collection("categories").doc(id);
-    await ref.set(toSet, { merge: true });
-
+    await ref.set(stripUndefinedDeep(toSet), { merge: true });
     const fresh = await ref.get();
-    res.json({ id, ...fresh.data() });
+    return res.json({ id, ...fresh.data() });
   } catch (e) {
     console.error("categories:update", e);
-    res.status(500).json({ error: e.message || "internal_error" });
+    return res.status(500).json({ error: e.message || "internal_error" });
   }
 });
 
-/* -------------------- DELETE -------------------- */
+/* -------------------- DELETE /api/admin/categories/:id -------------------- */
+/* Body: { tenant } */
 router.delete("/:id", async (req, res) => {
   try {
     const { tenant } = req.body || {};
     const { id } = req.params;
-    if (!tenant || !id)
-      return res.status(400).json({ error: "Missing tenant/id" });
+    if (!tenant || !id) return res.status(400).json({ error: "Missing tenant/id" });
 
-    // opcional: verificar subcategorías o productos antes de eliminar
+    // (opcional) validar que no tenga hijas o productos antes de borrar
     await db().collection("companies").doc(tenant).collection("categories").doc(id).delete();
-    res.json({ ok: true });
+    return res.json({ ok: true });
   } catch (e) {
     console.error("categories:delete", e);
-    res.status(500).json({ error: "internal_error" });
+    return res.status(500).json({ error: "internal_error" });
   }
 });
 
