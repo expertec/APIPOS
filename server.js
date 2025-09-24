@@ -7,7 +7,7 @@ const express = require("express");
 const cors = require("cors");
 const admin = require("firebase-admin");
 const categoriesRouter = require("./routes/categories");
-const publicSitesRouter = require("./routes/publicSites"); 
+
 // ---- Firebase Admin init (service account > ENV > applicationDefault) ----
 if (!admin.apps.length) {
   try {
@@ -58,8 +58,14 @@ const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || "")
 if (ALLOWED_ORIGINS.length === 0) {
   ALLOWED_ORIGINS.push("http://localhost:5173", "http://localhost:5174", "http://localhost:5175");
 }
+
+
+
+// CORS general (admin) ya lo tienes:
 app.use(cors({ origin: ALLOWED_ORIGINS, credentials: false }));
 app.use(express.json());
+
+app.use("/api/public", cors({ origin: true })); // refleja origin y habilita CORS
 
 // ---- Routers (importar DESPUÉS del init de Admin) ----
 const plansRouter = require("./routes/plans");
@@ -67,6 +73,8 @@ const kpisRouter = require("./routes/kpis");
 const companiesRouter = require("./routes/companies");
 const invitationsRouter = require("./routes/invitations");
 const productsRouter = require("./routes/products"); // ⬅️ movido aquí
+const publicSitesRouter = require("./routes/publicSites"); // ⬅️ asegúrate de tener este require
+
 
 app.use("/api/admin/companies", companiesRouter);
 app.use("/api/admin/invitations", invitationsRouter);
@@ -74,7 +82,9 @@ app.use("/api/admin/plans", plansRouter);
 app.use("/api/kpis", kpisRouter);
 app.use("/api/admin/products", productsRouter);
 app.use("/api/admin/categories", categoriesRouter);
-app.use("/api/public", publicSitesRouter);     
+app.use("/api/public/sites", publicSitesRouter);
+
+  
 
 
 // ---- Opcional: rutas de auth ----
