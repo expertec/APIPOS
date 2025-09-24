@@ -1,96 +1,112 @@
-// server/routes/publicSites.js
+// routes/publicSites.js
 const express = require("express");
 const admin = require("firebase-admin");
 
 const router = express.Router();
 const db = () => admin.firestore();
 
+/** Utilidad para formatear dinero */
+function moneyFromCents(cents, currency = "MXN", locale = "es-MX") {
+  if (typeof cents !== "number") return null;
+  try { return new Intl.NumberFormat(locale, { style: "currency", currency }).format(cents / 100); }
+  catch { return `$${(cents / 100).toFixed(2)} ${currency}`; }
+}
+
+/** “mejor esfuerzo” para portada */
+function pickCoverUrl(p = {}) {
+  if (p?.media?.coverUrl) return p.media.coverUrl;
+  if (p?.cover?.url) return p.cover.url;
+  if (typeof p?.cover === "string") return p.cover;
+  if (Array.isArray(p?.images) && p.images[0]?.url) return p.images[0].url;
+  if (Array.isArray(p?.gallery) && p.gallery[0]?.url) return p.gallery[0].url;
+  if (p?.image) return p.image;
+  if (p?.photo) return p.photo;
+  return null;
+}
+
 /**
  * GET /api/public/sites/:tenant
- * Devuelve datos públicos del negocio + hasta 6 productos activos.
- * NO expone campos sensibles.
+ * Opcional: ?limit=12&type=physical|digital|service&onSale=true
  */
-router.get("/sites/:tenant", async (req, res) => {
-  try {
-    const { tenant } = req.params;
+router.get("/:tenant", async (req, res) => {
+  const { tenant } = req.params;
+  const { limit = 12, type, onSale } = req.query;
 
+  try {
     const companyRef = db().collection("companies").doc(tenant);
     const companySnap = await companyRef.get();
     if (!companySnap.exists) {
-      // CORS + 404
-      res.set("Access-Control-Allow-Origin", "*");
-      return res.status(404).json({ error: "not_found" });
+      return res.status(404).json({ error: "not_found", message: "Company/tenant not found" });
     }
-
     const company = companySnap.data() || {};
 
-    // Ajusta estos campos a tu estructura real de "companies"
-    const payload = {
-      seo: {
-        title: company?.name || "Negocio",
-        description: company?.tagline || company?.description || "",
-      },
-      brand: {
-        name: company?.name || "",
-        logoUrl: company?.logoUrl || "",
-        primary: company?.brand?.primary || "#1f7a8c",
-      },
-      contact: {
-        whatsapp: company?.contact?.whatsapp || company?.phone || "",
-        email: company?.contact?.email || "",
-        phone: company?.contact?.phone || "",
-      },
-      hero: {
-        title: company?.hero?.title || company?.name || "Bienvenido",
-        subtitle: company?.hero?.subtitle || company?.tagline || "",
-      },
-      sections: { products: { title: "Productos", items: [] } },
+    // Leer algunos metadatos “opcionales”
+    const brand = {
+      name: company?.name || tenant,
+      logoUrl: company?.brand?.logoUrl || company?.logoUrl || "",
+      primaryColor: company?.theme?.primary || "#1f7a8c",
+      secondaryColor: company?.theme?.secondary || "#14535f",
     };
 
-    // Productos públicos (limita y proyecta campos seguros)
-    const productsSnap = await companyRef
-      .collection("products")
-      .where("status", "==", "active")
-      .orderBy("name")
-      .limit(6)
-      .get();
+    const hero = {
+      title: company?.site?.hero?.title || company?.headline || company?.name || "Bienvenido",
+      subtitle: company?.site?.hero?.subtitle || company?.tagline || "",
+      bgUrl: company?.site?.hero?.bgUrl || "",
+    };
 
-    payload.sections.products.items = productsSnap.docs.map((d) => {
-      const p = d.data();
+    // Query productos con filtros “blandos” y sin reventar índices
+    let ref = companyRef.collection("products");
+    if (type) ref = ref.where("type", "==", String(type));
+    if (onSale === "true") ref = ref.where("price.onSale", "==", true);
+    // Para evitar índices compuestos, ordenaremos por name si no hay filtros de búsqueda
+    ref = ref.orderBy("name").limit(Number(limit) || 12);
 
-      const priceCents =
-        p?.price?.onSale && typeof p?.price?.saleCents === "number"
-          ? p.price.saleCents
-          : (typeof p?.price?.regularCents === "number" ? p.price.regularCents : null);
+    let products = [];
+    try {
+      const snap = await ref.get();
+      products = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    } catch (e) {
+      // Si falla por índice, devolvemos lista vacía sin romper
+      console.warn("[publicSites] products query failed (likely index):", e?.message);
+      products = [];
+    }
 
-      const currency = p?.price?.currency || "MXN";
-      const imageUrl =
-        (Array.isArray(p.images) && p.images[0]?.url) ||
-        p?.media?.coverUrl ||
-        "";
-
+    const items = products.map((p) => {
+      const img = pickCoverUrl(p);
+      const price = p?.price || {};
       return {
-        id: d.id,
-        title: p.name,
-        text: p.shortDescription || "",
-        imageUrl,
+        id: p.id,
+        title: p?.name || "Producto",
+        text: p?.shortDescription || "",
+        imageUrl: img || "",
         priceFormatted:
-          priceCents != null
-            ? new Intl.NumberFormat("es-MX", { style: "currency", currency }).format(priceCents / 100)
-            : "",
-        ctaLink: payload.contact.whatsapp
-          ? `https://wa.me/${payload.contact.whatsapp}?text=${encodeURIComponent(`Hola, me interesa: ${p.name}`)}`
-          : "",
+          price?.onSale && typeof price?.saleCents === "number"
+            ? moneyFromCents(price.saleCents, price?.currency)
+            : moneyFromCents(price?.regularCents, price?.currency),
+        ctaLink: company?.contact?.whatsApp
+          ? `https://wa.me/${company.contact.whatsApp}?text=${encodeURIComponent(
+              `Hola, me interesa ${p?.name || "un producto"}.`
+            )}`
+          : null,
       };
     });
 
-    // CORS público + caché corto
-    res.set("Access-Control-Allow-Origin", "*");
-    res.set("Cache-Control", "public, max-age=30, s-maxage=60");
+    const payload = {
+      tenant,
+      brand,
+      hero,
+      sections: {
+        products: {
+          title: "Productos",
+          items,
+        },
+      },
+      generatedAt: new Date().toISOString(),
+    };
+
     return res.json(payload);
   } catch (e) {
-    console.error("public:site", e);
-    res.set("Access-Control-Allow-Origin", "*");
+    console.error("publicSites:get", e);
     return res.status(500).json({ error: "internal_error" });
   }
 });
