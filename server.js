@@ -7,6 +7,7 @@ const express = require("express");
 const cors = require("cors");
 const admin = require("firebase-admin");
 const categoriesRouter = require("./routes/categories");
+const publicSitesRouter = require("./routes/publicSites"); 
 // ---- Firebase Admin init (service account > ENV > applicationDefault) ----
 if (!admin.apps.length) {
   try {
@@ -73,6 +74,7 @@ app.use("/api/admin/plans", plansRouter);
 app.use("/api/kpis", kpisRouter);
 app.use("/api/admin/products", productsRouter);
 app.use("/api/admin/categories", categoriesRouter);
+app.use("/api/public", publicSitesRouter);     
 
 
 // ---- Opcional: rutas de auth ----
