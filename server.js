@@ -70,20 +70,27 @@ app.use("/api/public", cors({ origin: true })); // refleja origin y habilita COR
 // ---- Routers (importar DESPUÉS del init de Admin) ----
 const plansRouter = require("./routes/plans");
 const kpisRouter = require("./routes/kpis");
-const companiesRouter = require("./routes/companies");
+const adminCompaniesRouter = require("./routes/adminCompanies");     // ✅ crea empresa + publicSite
 const invitationsRouter = require("./routes/invitations");
-const productsRouter = require("./routes/products"); // ⬅️ movido aquí
-const publicSitesRouter = require("./routes/publicSites"); // ⬅️ asegúrate de tener este require
+const productsRouter = require("./routes/products");
+const publicSitesRouter = require("./routes/publicSites");           // ✅ versión nueva que lee company.publicSite
+const adminPublicSitesRouter = require("./routes/adminPublicSites"); // ✅ GET/PUT publicSite (Admin)
+// (Opcional) Galería en Admin:
+const adminGalleryRouter = require("./routes/adminGallery");
 
+app.use("/api/admin/companies", adminCompaniesRouter);      // ✅ usa el nuevo router
 
-app.use("/api/admin/companies", companiesRouter);
 app.use("/api/admin/invitations", invitationsRouter);
 app.use("/api/admin/plans", plansRouter);
 app.use("/api/kpis", kpisRouter);
 app.use("/api/admin/products", productsRouter);
 app.use("/api/admin/categories", categoriesRouter);
+app.use("/api/admin/public-sites", adminPublicSitesRouter); // ✅ para el SiteEditor (Admin)
+
 app.use("/api/public/sites", publicSitesRouter);
 
+// (Opcional)
+app.use("/api/admin/gallery", adminGalleryRouter);
   
 
 
