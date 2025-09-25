@@ -50,22 +50,68 @@ if (!db) {
 // ---- Express app ----
 const app = express();
 
-// CORS
+// CORS configuration
 const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || "")
   .split(",")
   .map(s => s.trim())
   .filter(Boolean);
+
+// Agregar orígenes por defecto si no hay ninguno configurado
 if (ALLOWED_ORIGINS.length === 0) {
-  ALLOWED_ORIGINS.push("http://localhost:5173", "http://localhost:5174", "http://localhost:5175");
+  ALLOWED_ORIGINS.push(
+    "http://localhost:5173", 
+    "http://localhost:5174", 
+    "http://localhost:5175",
+    "http://localhost:3000",
+    "http://127.0.0.1:5500", // Live Server
+    "null" // Para archivos locales (file://)
+  );
 }
 
+// ✅ CORS GLOBAL más permisivo
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Permitir requests sin origin (como apps móviles, Postman, archivos locales)
+    if (!origin) return callback(null, true);
+    
+    // Si el origin está en la lista permitida
+    if (ALLOWED_ORIGINS.includes(origin)) {
+      return callback(null, true);
+    }
+    
+    // Si es localhost con cualquier puerto
+    if (origin.match(/^https?:\/\/localhost:\d+$/)) {
+      return callback(null, true);
+    }
+    
+    // Si es 127.0.0.1 con cualquier puerto
+    if (origin.match(/^https?:\/\/127\.0\.0\.1:\d+$/)) {
+      return callback(null, true);
+    }
+    
+    console.log(`CORS: Bloqueando origin: ${origin}`);
+    callback(new Error('Not allowed by CORS'));
+  },
+  credentials: false,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With'],
+  preflightContinue: false,
+  optionsSuccessStatus: 200
+};
 
+// Aplicar CORS general
+app.use(cors(corsOptions));
 
-// CORS general (admin) ya lo tienes:
-app.use(cors({ origin: ALLOWED_ORIGINS, credentials: false }));
+// ✅ CORS específico para rutas públicas (MÁS PERMISIVO)
+app.use("/api/public", cors({
+  origin: true, // Permite cualquier origin
+  credentials: false,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With']
+}));
+
+// Middleware para parsear JSON
 app.use(express.json());
-
-app.use("/api/public", cors({ origin: true })); // refleja origin y habilita CORS
 
 // ---- Routers (importar DESPUÉS del init de Admin) ----
 const plansRouter = require("./routes/plans");
@@ -78,8 +124,8 @@ const adminPublicSitesRouter = require("./routes/adminPublicSites"); // ✅ GET/
 // (Opcional) Galería en Admin:
 //const adminGalleryRouter = require("./routes/adminGallery");
 
+// Rutas de la API
 app.use("/api/admin/companies", adminCompaniesRouter);      // ✅ usa el nuevo router
-
 app.use("/api/admin/invitations", invitationsRouter);
 app.use("/api/admin/plans", plansRouter);
 app.use("/api/kpis", kpisRouter);
@@ -87,17 +133,23 @@ app.use("/api/admin/products", productsRouter);
 app.use("/api/admin/categories", categoriesRouter);
 app.use("/api/admin/public-sites", adminPublicSitesRouter); // ✅ para el SiteEditor (Admin)
 
+// ✅ Ruta pública con CORS extra permisivo
 app.use("/api/public/sites", publicSitesRouter);
 
 // (Opcional)
 // app.use("/api/admin/gallery", adminGalleryRouter);
-  
-
 
 // ---- Opcional: rutas de auth ----
 let authRoutes;
-try { authRoutes = require("./auth"); }
-catch (_) { try { authRoutes = require("./routes/auth"); } catch { console.warn("Sin rutas /api auth"); } }
+try { 
+  authRoutes = require("./auth"); 
+} catch (_) { 
+  try { 
+    authRoutes = require("./routes/auth"); 
+  } catch { 
+    console.warn("Sin rutas /api auth"); 
+  } 
+}
 if (authRoutes) app.use("/api", authRoutes);
 
 // ---- WhatsApp multi-tenant (Baileys) ----
@@ -106,19 +158,34 @@ const WA_SESSION_ROOT = process.env.WA_SESSION_ROOT || "/var/data/wa-sessions";
 console.log("[WA] WA_SESSION_ROOT =", WA_SESSION_ROOT);
 const wa = createBaileysManager({ basePath: WA_SESSION_ROOT });
 
+// WhatsApp endpoints
 app.get("/api/wa/:tenant/status", (req, res) => {
-  try { return res.json(wa.ensure(req.params.tenant).getStatus()); }
-  catch (e) { console.error("WA status error:", e); return res.status(500).json({ error: "status-failed" }); }
+  try { 
+    return res.json(wa.ensure(req.params.tenant).getStatus()); 
+  } catch (e) { 
+    console.error("WA status error:", e); 
+    return res.status(500).json({ error: "status-failed" }); 
+  }
 });
 
 app.post("/api/wa/:tenant/start", async (req, res) => {
-  try { await wa.ensure(req.params.tenant).start(); return res.json(wa.ensure(req.params.tenant).getStatus()); }
-  catch (e) { console.error("WA start error:", e); return res.status(500).json({ error: "start-failed" }); }
+  try { 
+    await wa.ensure(req.params.tenant).start(); 
+    return res.json(wa.ensure(req.params.tenant).getStatus()); 
+  } catch (e) { 
+    console.error("WA start error:", e); 
+    return res.status(500).json({ error: "start-failed" }); 
+  }
 });
 
 app.post("/api/wa/:tenant/logout", async (req, res) => {
-  try { await wa.ensure(req.params.tenant).logout(); return res.json({ ok: true }); }
-  catch (e) { console.error("WA logout error:", e); return res.status(500).json({ error: "logout-failed" }); }
+  try { 
+    await wa.ensure(req.params.tenant).logout(); 
+    return res.json({ ok: true }); 
+  } catch (e) { 
+    console.error("WA logout error:", e); 
+    return res.status(500).json({ error: "logout-failed" }); 
+  }
 });
 
 app.post("/api/wa/:tenant/prepare", (req, res) => {
@@ -147,25 +214,46 @@ app.post("/api/wa/:tenant/send-text", async (req, res) => {
 });
 
 app.get("/api/wa/:tenant/qr", (req, res) => {
-  try { return res.json({ qr: wa.ensure(req.params.tenant).getStatus().lastQr || null }); }
-  catch (e) { console.error("WA qr error:", e); return res.status(500).json({ error: "qr-failed" }); }
+  try { 
+    return res.json({ qr: wa.ensure(req.params.tenant).getStatus().lastQr || null }); 
+  } catch (e) { 
+    console.error("WA qr error:", e); 
+    return res.status(500).json({ error: "qr-failed" }); 
+  }
 });
 
-// ---- Health ----
-app.get("/api/health", (_req, res) => res.json({ ok: true }));
+// ---- Health endpoint ----
+app.get("/api/health", (_req, res) => {
+  res.json({ 
+    ok: true, 
+    timestamp: new Date().toISOString(),
+    cors_origins: ALLOWED_ORIGINS
+  });
+});
 
-// ---- 404 JSON ----
-app.use((req, res) => res.status(404).json({ error: "not_found", path: req.originalUrl }));
+// ---- 404 JSON handler ----
+app.use((req, res) => {
+  console.log(`404: ${req.method} ${req.originalUrl}`);
+  res.status(404).json({ error: "not_found", path: req.originalUrl });
+});
 
 // ---- Error handler JSON ----
-app.use((err, _req, res, _next) => {
+app.use((err, req, res, next) => {
   console.error("UNCAUGHT ERROR:", err);
+  console.error("Request:", req.method, req.originalUrl);
   const status = err.status || err.code || 500;
-  res.status(status).json({ error: err.message || "internal_error" });
+  res.status(status).json({ 
+    error: err.message || "internal_error",
+    path: req.originalUrl 
+  });
 });
 
 // ---- Listen ----
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () =>
-  console.log(`API escuchando en :${PORT} - ORIGINS: ${ALLOWED_ORIGINS.join(", ")}`)
-);
+app.listen(PORT, () => {
+  console.log(`🚀 API escuchando en puerto :${PORT}`);
+  console.log(`📡 CORS Origins permitidos: ${ALLOWED_ORIGINS.join(", ")}`);
+  console.log(`🌍 Health check: http://localhost:${PORT}/api/health`);
+});
+
+module.exports = app;
