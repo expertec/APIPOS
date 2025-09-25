@@ -144,3 +144,20 @@ router.post("/", async (req, res) => {
     return res.status(500).json({ error: "internal" });
   }
 });
+
+/** POST /api/admin/companies/:tenant/complete-onboarding */
+router.post("/:tenant/complete-onboarding", async (req, res) => {
+  try {
+    await db.doc(`companies/${req.params.tenant}`).set(
+      { onboardingCompletedAt: FieldValue.serverTimestamp() },
+      { merge: true }
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("complete-onboarding error:", e);
+    res.status(500).json({ error: "internal" });
+  }
+});
+
+module.exports = router;
+

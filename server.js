@@ -76,7 +76,7 @@ const productsRouter = require("./routes/products");
 const publicSitesRouter = require("./routes/publicSites");           // ✅ versión nueva que lee company.publicSite
 const adminPublicSitesRouter = require("./routes/adminPublicSites"); // ✅ GET/PUT publicSite (Admin)
 // (Opcional) Galería en Admin:
-const adminGalleryRouter = require("./routes/adminGallery");
+//const adminGalleryRouter = require("./routes/adminGallery");
 
 app.use("/api/admin/companies", adminCompaniesRouter);      // ✅ usa el nuevo router
 
@@ -90,7 +90,7 @@ app.use("/api/admin/public-sites", adminPublicSitesRouter); // ✅ para el SiteE
 app.use("/api/public/sites", publicSitesRouter);
 
 // (Opcional)
-app.use("/api/admin/gallery", adminGalleryRouter);
+// app.use("/api/admin/gallery", adminGalleryRouter);
   
 
 
