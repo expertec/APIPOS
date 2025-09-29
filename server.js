@@ -94,12 +94,19 @@ const corsOptions = {
   },
   credentials: false,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With'],
+  allowedHeaders: [
+    'Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With',
+    'x-tenant', 'X-Tenant' // 👈 añade estos
+  ],
+  exposedHeaders: ['x-tenant','X-Tenant'], // (opcional)
   preflightContinue: false,
   optionsSuccessStatus: 200
 };
 
-// Aplicar CORS general
+
+// Responder preflight y aplicar CORS general
+app.options('*', cors(corsOptions));
+
 app.use(cors(corsOptions));
 
 // ✅ CORS específico para rutas públicas (MÁS PERMISIVO)
@@ -107,7 +114,11 @@ app.use("/api/public", cors({
   origin: true, // Permite cualquier origin
   credentials: false,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With']
+    allowedHeaders: [
+   'Content-Type','Authorization','Accept','Origin','X-Requested-With',
+    'x-tenant','X-Tenant' // 👈 también aquí
+  ]
+
 }));
 
 // Middleware para parsear JSON
