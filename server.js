@@ -105,7 +105,7 @@ const corsOptions = {
 
 
 // Responder preflight y aplicar CORS general
-app.options('*', cors(corsOptions));
+ app.options(/.*/, cors(corsOptions)); // Express 5: usar RegExp, no '*'
 
 app.use(cors(corsOptions));
 
