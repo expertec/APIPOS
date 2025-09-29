@@ -7,6 +7,7 @@ const express = require("express");
 const cors = require("cors");
 const admin = require("firebase-admin");
 const categoriesRouter = require("./routes/categories");
+const aiRouter = require("./routes/ai");
 
 // ---- Firebase Admin init (service account > ENV > applicationDefault) ----
 if (!admin.apps.length) {
@@ -121,6 +122,8 @@ app.use("/api/public", cors({
 
 }));
 
+
+
 // Middleware para parsear JSON
 app.use(express.json());
 
@@ -143,6 +146,7 @@ app.use("/api/kpis", kpisRouter);
 app.use("/api/admin/products", productsRouter);
 app.use("/api/admin/categories", categoriesRouter);
 app.use("/api/admin/public-sites", adminPublicSitesRouter); // ✅ para el SiteEditor (Admin)
+app.use("/api/admin/ai", aiRouter);
 
 // ✅ Ruta pública con CORS extra permisivo
 app.use("/api/public/sites", publicSitesRouter);
